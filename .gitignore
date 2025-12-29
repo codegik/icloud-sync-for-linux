@@ -1,0 +1,8 @@
+# Ignore Playwright saved session state (contains auth tokens)
+playwright-state/
+
+# Node modules and other standard ignores
+node_modules/
+
+.idea
+

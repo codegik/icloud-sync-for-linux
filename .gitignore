@@ -1,8 +1,5 @@
-# Ignore Playwright saved session state (contains auth tokens)
-playwright-state/
-
-# Node modules and other standard ignores
-node_modules/
-
 .idea
 
+# Saved iCloud web pages (may contain personal files)
+iCloud Drive.html
+iCloud Drive_files/

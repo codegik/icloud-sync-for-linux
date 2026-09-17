@@ -90,4 +90,4 @@ Set in `~/.config/icloud-sync/config` (re-run `./install.sh`, or edit it and run
 
 - Every sync lists both sides completely, which is slow for a large Drive. Changes made in iCloud show up at the next hourly check.
 - Local edits made while a sync is running aren't picked up until the next sync.
-- The rclone iCloud backend is experimental. iCloud has no file hashes, so changes are detected by size and modification time.
+- The rclone iCloud backend is experimental. iCloud has no file hashes, and it reports the wrong size for iWork files (Pages, Numbers, Keynote), so changes are detected by modification time only.

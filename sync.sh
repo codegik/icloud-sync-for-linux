@@ -89,6 +89,8 @@ sync_once() (
   $resync && extra+=(--resync-mode newer)
 
   echo "Syncing $LOCAL_DIR <-> $REMOTE"
+  # --ignore-size: iCloud lists iWork files (.pages, .numbers, .key) with a size that doesn't match the download,
+  # which bisync treats as "corrupted on transfer" and aborts. Changes are detected by modification time only
   rclone bisync "$LOCAL_DIR" "$REMOTE" \
     --workdir "$workdir" \
     --create-empty-src-dirs \
@@ -97,6 +99,7 @@ sync_once() (
     --conflict-resolve newer \
     --conflict-loser num \
     --resilient \
+    --ignore-size \
     --recover \
     --max-lock 2m \
     --stats 1m --stats-one-line \

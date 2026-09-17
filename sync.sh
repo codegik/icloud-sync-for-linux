@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Two-way sync between a local folder and iCloud Drive (rclone bisync).
-# New, changed and deleted files and folders are applied to both sides.
+# New, changed and deleted files and folders are applied to both sides, except folders in ICLOUD_EXCLUDE_DIRS.
 # Local files that are deleted or overwritten are moved to a backup folder; iCloud deletions go to iCloud's trash.
 #
 # Usage: ./sync.sh [--watch] [extra rclone flags]
@@ -24,6 +24,10 @@ SETTLE_SECONDS="${ICLOUD_SETTLE_SECONDS:-10}"
 RETRY_INTERVAL="${ICLOUD_RETRY_INTERVAL:-60}"
 # A sync that reads no data for this long is stuck (e.g. on a dead connection) and gets stopped
 STALL_SECONDS="${ICLOUD_STALL_SECONDS:-600}"
+# Folder names never synced, at any depth: thousands of small, constantly changing files that make every sync slow.
+# Empty disables it. Changing it needs a --resync
+EXCLUDE_DIRS="${ICLOUD_EXCLUDE_DIRS-.git node_modules target build .gradle .idea .vscode __pycache__ .venv}"
+read -ra EXCLUDE_NAMES <<<"$EXCLUDE_DIRS"
 LOCK_FILE="${XDG_RUNTIME_DIR:-/tmp}/icloud-sync.lock"
 
 EXIT_NEEDS_RESYNC=2
@@ -128,7 +132,22 @@ sync_once() (
     exit $EXIT_NEEDS_RESYNC
   fi
 
-  local extra=()
+  # bisync stores the filters file's hash at --resync and refuses to run once it changes
+  local filters="$workdir/filters" extra=() name
+  if ((${#EXCLUDE_NAMES[@]})); then
+    for name in "${EXCLUDE_NAMES[@]}"; do
+      printf -- '- %s/**\n' "$name"
+    done >"$filters"
+    extra+=(--filters-file "$filters")
+  else
+    rm -f "$filters"
+  fi
+  if ! $resync && [[ "$(md5sum <"$filters" 2>/dev/null | cut -d' ' -f1)" != "$(cat "$filters.md5" 2>/dev/null)" ]]; then
+    echo "The excluded folders (ICLOUD_EXCLUDE_DIRS) changed: run ./sync.sh --resync (deletes nothing)" >&2
+    exit $EXIT_NEEDS_RESYNC
+  fi
+  $resync && [[ ! -f "$filters" ]] && rm -f "$filters.md5"
+
   # On the first run, a file that differs on both sides keeps the newer version
   $resync && extra+=(--resync-mode newer)
 
@@ -155,17 +174,30 @@ sync_once() (
     "$@"
 )
 
+regex_escape() { sed 's/[][\.*^$+?(){}|]/\\&/g' <<<"$1"; }
+
+# Changes inside excluded folders don't start a sync. inotifywait matches the full path, so anchor below LOCAL_DIR
+exclude_regex='\.partial$'
+for name in "${EXCLUDE_NAMES[@]}"; do
+  exclude_regex+="|^$(regex_escape "${LOCAL_DIR%/}")/(.*/)?$(regex_escape "$name")(/|$)"
+done
+LOCAL_EVENTS=(-r -qq -e close_write,create,delete,move --exclude "$exclude_regex")
+
+# Returns once nothing changed locally for SETTLE_SECONDS
+wait_for_settle() {
+  echo "Local changes detected"
+  while inotifywait "${LOCAL_EVENTS[@]}" -t "$SETTLE_SECONDS" "$LOCAL_DIR"; do :; done
+}
+
 # Returns when something changed locally (and then settled) or after the given number of seconds
 wait_for_changes() {
   local timeout=$1
-  local events=(-r -qq -e close_write,create,delete,move --exclude '\.partial$')
   local status=0
 
-  inotifywait "${events[@]}" -t "$timeout" "$LOCAL_DIR" || status=$?
+  inotifywait "${LOCAL_EVENTS[@]}" -t "$timeout" "$LOCAL_DIR" || status=$?
   case $status in
   0)
-    echo "Local changes detected"
-    while inotifywait "${events[@]}" -t "$SETTLE_SECONDS" "$LOCAL_DIR"; do :; done
+    wait_for_settle
     ;;
   2) ;; # timeout: time for the periodic check
   *)
@@ -190,8 +222,13 @@ watch_loop() {
   done
 
   # Notify once per problem, not on every retry
-  local failing=false status wait
+  local failing=false status wait watcher
   while true; do
+    # A sync only sees local changes made before it listed the folder, so watch for changes while it runs.
+    # Files the sync itself downloads or deletes count too, which costs one extra sync that finds nothing
+    inotifywait "${LOCAL_EVENTS[@]}" "$LOCAL_DIR" &
+    watcher=$!
+
     status=0
     sync_once "$@" || status=$?
     # Retry failures soon, so a sync doesn't wait an hour after the network comes back
@@ -204,7 +241,8 @@ watch_loop() {
       wait=$POLL_INTERVAL
       ;;
     "$EXIT_NEEDS_RESYNC")
-      notify "First sync not done yet. Run: ./sync.sh --resync"
+      kill "$watcher" 2>/dev/null || true
+      notify "A --resync is needed (first sync not done, or excluded folders changed). Run: ./sync.sh --resync"
       exit $status
       ;;
     "$EXIT_BUSY") ;;
@@ -222,7 +260,16 @@ watch_loop() {
       ;;
     esac
 
-    wait_for_changes "$wait"
+    if kill -0 "$watcher" 2>/dev/null; then
+      # Still waiting: nothing changed during the sync
+      kill "$watcher" 2>/dev/null || true
+      wait "$watcher" 2>/dev/null || true
+      wait_for_changes "$wait"
+    elif wait "$watcher"; then
+      wait_for_settle
+    else
+      wait_for_changes "$wait"
+    fi
   done
 }
 

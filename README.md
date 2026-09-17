@@ -79,6 +79,7 @@ Set in `~/.config/icloud-sync/config` (re-run `./install.sh`, or edit it and run
 | `ICLOUD_SETTLE_SECONDS` | `10` | quiet period after local changes before syncing (`--watch`) |
 | `ICLOUD_RETRY_INTERVAL` | `60` | seconds before retrying a failed sync (`--watch`) |
 | `ICLOUD_STALL_SECONDS` | `600` | stop a sync that received no data for this long (stuck connection) |
+| `ICLOUD_EXCLUDE_DIRS` | `.git node_modules target build .gradle .idea .vscode __pycache__ .venv` | folder names never synced, at any depth; empty syncs everything. Changing it needs `icloud-sync --resync` |
 
 ## Safety
 
@@ -91,5 +92,6 @@ Set in `~/.config/icloud-sync/config` (re-run `./install.sh`, or edit it and run
 ## Known limits
 
 - Every sync lists both sides completely, which is slow for a large Drive. Changes made in iCloud show up at the next hourly check.
-- Local edits made while a sync is running aren't picked up until the next sync.
+- iCloud takes about 20 seconds to remove each folder, so deleting a folder with many subfolders locally takes a long time to reach iCloud.
+- Folders listed in `ICLOUD_EXCLUDE_DIRS` are skipped on both sides. Copies already in iCloud stay there; delete them on icloud.com if you don't need them.
 - The rclone iCloud backend is experimental. iCloud has no file hashes, and it reports the wrong size for iWork files (Pages, Numbers, Keynote), so changes are detected by modification time only.

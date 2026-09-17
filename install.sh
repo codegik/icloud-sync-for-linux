@@ -260,6 +260,7 @@ configure() {
     printf 'ICLOUD_DATA_DIR=%q\n' "$DATA_DIR"
     echo "# ICLOUD_BACKUP_DIR=\"\$ICLOUD_DATA_DIR/backup\"   where replaced or deleted local files go"
     echo "# ICLOUD_SETTLE_SECONDS=10                      quiet period after local changes before syncing"
+    echo "# ICLOUD_EXCLUDE_DIRS=\".git node_modules target build .gradle .idea .vscode __pycache__ .venv\"   folders never synced; changing it needs icloud-sync --resync"
   } >"$CONFIG"
   echo "Saved $CONFIG"
 }

@@ -20,11 +20,16 @@ MAX_DELETE="${ICLOUD_MAX_DELETE:-10}"
 POLL_INTERVAL="${ICLOUD_POLL_INTERVAL:-3600}"
 # After a local change, wait until nothing changed for this long, so a burst of changes becomes one sync
 SETTLE_SECONDS="${ICLOUD_SETTLE_SECONDS:-10}"
+# After a failed sync, --watch tries again after this long instead of waiting for POLL_INTERVAL
+RETRY_INTERVAL="${ICLOUD_RETRY_INTERVAL:-60}"
+# A sync that reads no data for this long is stuck (e.g. on a dead connection) and gets stopped
+STALL_SECONDS="${ICLOUD_STALL_SECONDS:-600}"
 LOCK_FILE="${XDG_RUNTIME_DIR:-/tmp}/icloud-sync.lock"
 
 EXIT_NEEDS_RESYNC=2
 EXIT_NO_ACCESS=3
 EXIT_BUSY=4
+EXIT_STALLED=5
 
 REMOTE_NAME="${REMOTE%%:*}:"
 
@@ -53,6 +58,45 @@ check_setup() {
   esac
 
   mkdir -p "$LOCAL_DIR" "$BACKUP_ROOT"
+}
+
+# Runs a command and stops it if it reads nothing (network or disk) for STALL_SECONDS.
+# rclone can wait forever on a dead connection while still logging stats, so its output is no sign of progress
+run_with_watchdog() {
+  "$@" &
+  local pid=$! rchar last="" idle=0
+
+  # Background commands ignore Ctrl+C in scripts, so pass it on
+  trap "kill -TERM $pid 2>/dev/null; wait $pid || true; exit 130" INT TERM
+
+  while kill -0 "$pid" 2>/dev/null; do
+    sleep 5
+    rchar=$(awk '$1 == "rchar:" { print $2 }' "/proc/$pid/io" 2>/dev/null) || break
+    [[ -n "$rchar" ]] || break
+
+    if [[ "$rchar" != "$last" ]]; then
+      last=$rchar
+      idle=0
+    elif (((idle += 5) >= STALL_SECONDS)); then
+      echo "Nothing received for ${STALL_SECONDS}s, the connection is probably stuck: stopping the sync" >&2
+      kill -TERM "$pid" 2>/dev/null || true
+      # Let rclone save its state, but don't wait long: that may need the stuck connection too
+      local i
+      for i in {1..6}; do
+        sleep 5
+        kill -0 "$pid" 2>/dev/null || break
+      done
+      kill -KILL "$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null || true
+      trap - INT TERM
+      return $EXIT_STALLED
+    fi
+  done
+
+  local status=0
+  wait "$pid" || status=$?
+  trap - INT TERM
+  return $status
 }
 
 # Runs in a subshell so the lock is released when it returns
@@ -91,7 +135,8 @@ sync_once() (
   echo "Syncing $LOCAL_DIR <-> $REMOTE"
   # --ignore-size: iCloud lists iWork files (.pages, .numbers, .key) with a size that doesn't match the download,
   # which bisync treats as "corrupted on transfer" and aborts. Changes are detected by modification time only
-  rclone bisync "$LOCAL_DIR" "$REMOTE" \
+  # --bind 0.0.0.0 forces IPv4: over IPv6, connections to iCloud can stall with no error and bisync waits forever
+  run_with_watchdog rclone bisync "$LOCAL_DIR" "$REMOTE" \
     --workdir "$workdir" \
     --create-empty-src-dirs \
     --backup-dir1 "$BACKUP_ROOT/$(date +%F-%H%M%S)" \
@@ -101,6 +146,8 @@ sync_once() (
     --resilient \
     --ignore-size \
     --recover \
+    --bind 0.0.0.0 \
+    --timeout 2m \
     --max-lock 2m \
     --stats 1m --stats-one-line \
     -v \
@@ -108,12 +155,13 @@ sync_once() (
     "$@"
 )
 
-# Returns when something changed locally (and then settled) or after POLL_INTERVAL seconds
+# Returns when something changed locally (and then settled) or after the given number of seconds
 wait_for_changes() {
+  local timeout=$1
   local events=(-r -qq -e close_write,create,delete,move --exclude '\.partial$')
   local status=0
 
-  inotifywait "${events[@]}" -t "$POLL_INTERVAL" "$LOCAL_DIR" || status=$?
+  inotifywait "${events[@]}" -t "$timeout" "$LOCAL_DIR" || status=$?
   case $status in
   0)
     echo "Local changes detected"
@@ -142,15 +190,18 @@ watch_loop() {
   done
 
   # Notify once per problem, not on every retry
-  local failing=false status
+  local failing=false status wait
   while true; do
     status=0
     sync_once "$@" || status=$?
+    # Retry failures soon, so a sync doesn't wait an hour after the network comes back
+    wait=$RETRY_INTERVAL
 
     case $status in
     0)
       $failing && notify "Sync is working again"
       failing=false
+      wait=$POLL_INTERVAL
       ;;
     "$EXIT_NEEDS_RESYNC")
       notify "First sync not done yet. Run: ./sync.sh --resync"
@@ -161,13 +212,17 @@ watch_loop() {
       $failing || notify "Cannot reach iCloud. If the login expired, run: rclone reconnect $REMOTE_NAME"
       failing=true
       ;;
+    "$EXIT_STALLED")
+      $failing || notify "Sync got stuck (connection not responding) and was stopped. Retrying"
+      failing=true
+      ;;
     *)
       $failing || notify "Sync failed (exit $status). Check: journalctl --user -u icloud-sync"
       failing=true
       ;;
     esac
 
-    wait_for_changes
+    wait_for_changes "$wait"
   done
 }
 

@@ -77,6 +77,8 @@ Set in `~/.config/icloud-sync/config` (re-run `./install.sh`, or edit it and run
 | `ICLOUD_MAX_DELETE` | `10` | abort if more than this **percent** of files would be deleted |
 | `ICLOUD_POLL_INTERVAL` | `3600` | seconds between checks for iCloud changes (`--watch`) |
 | `ICLOUD_SETTLE_SECONDS` | `10` | quiet period after local changes before syncing (`--watch`) |
+| `ICLOUD_RETRY_INTERVAL` | `60` | seconds before retrying a failed sync (`--watch`) |
+| `ICLOUD_STALL_SECONDS` | `600` | stop a sync that received no data for this long (stuck connection) |
 
 ## Safety
 

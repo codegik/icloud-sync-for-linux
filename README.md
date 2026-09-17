@@ -2,22 +2,41 @@
 
 Two-way sync between iCloud Drive and a local folder on Linux. It's a single script, `sync.sh`, built on [rclone bisync](https://rclone.org/bisync/) and [rclone's iCloud Drive backend](https://rclone.org/iclouddrive/).
 
-New, changed and deleted files and folders are applied to both sides. With `--watch` the script keeps running: it syncs when local files change and every hour to pick up changes made in iCloud.
+New, changed and deleted files and folders are applied to both sides. With `--watch` the script keeps running: it syncs when local files change and every hour (configurable) to pick up changes made in iCloud.
 
-## Setup
+## Install
 
-1. Install the tools: `sudo pacman -S rclone inotify-tools libnotify` (rclone must be ≥ 1.69)
-2. Create the remote: `rclone config` → new remote named `icloud`, type `iclouddrive`. Use your normal Apple ID password (app-specific passwords are rejected) and approve the 2FA prompt.
-   - If Advanced Data Protection is on, enable *Settings → Apple Account → iCloud → Access iCloud Data on the Web* on your iPhone.
-3. Check it works: `rclone lsd icloud:`
+Works on any Linux with systemd: Arch (including Omarchy), Debian/Ubuntu, Fedora, openSUSE… Nothing is installed system-wide except missing packages, and the installer asks before using sudo.
+
+```sh
+git clone https://github.com/codegik/icloud-sync-for-linux.git
+cd icloud-sync-for-linux
+./install.sh
+```
+
+or, without cloning:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/codegik/icloud-sync-for-linux/master/install.sh | bash
+```
+
+The installer:
+
+1. Checks for rclone ≥ 1.69, inotify-tools and libnotify, and offers to install what's missing. If your distro's rclone is too old, it offers [rclone's official installer](https://rclone.org/install/).
+2. Asks for the local folder, the part of iCloud Drive to sync, how often to check iCloud and the deletion safety limit.
+3. Connects rclone to iCloud if needed. Use your normal Apple ID password (app-specific passwords are rejected) and approve the 2FA prompt. If Advanced Data Protection is on, first enable *Settings → Apple Account → iCloud → Access iCloud Data on the Web* on your iPhone.
+4. Installs `~/.local/bin/icloud-sync`, the settings file `~/.config/icloud-sync/config` and a systemd user service.
+
+Run it again to update or change settings (your current answers are the defaults). `./install.sh --uninstall` removes the program and the service. Your files, settings and backups stay.
 
 ## First run
 
 bisync has to merge both sides once before normal runs work:
 
 ```sh
-./sync.sh --resync --dry-run    # preview
-tmux new -s icloud ./sync.sh --resync
+icloud-sync --resync --dry-run    # preview
+tmux new -s icloud icloud-sync --resync    # or, without tmux: systemd-run --user --collect --unit icloud-sync-resync ~/.local/bin/icloud-sync --resync
+systemctl --user enable --now icloud-sync    # afterwards: keep syncing in the background
 ```
 
 `--resync` copies anything missing to the other side and **deletes nothing**. If a file differs on the two sides, the newer version wins. With a large Drive this can take hours or days. If it's interrupted, run it again; files already copied are skipped.
@@ -25,22 +44,15 @@ tmux new -s icloud ./sync.sh --resync
 ## Usage
 
 ```sh
-./sync.sh              # one sync
-./sync.sh --dry-run    # preview one sync
-./sync.sh --watch      # keep running: sync on local changes and every hour
+icloud-sync              # one sync
+icloud-sync --dry-run    # preview one sync
+icloud-sync --watch      # keep running: sync on local changes and on the configured interval
+journalctl --user -u icloud-sync -f    # logs of the background service
 ```
 
-Any extra arguments are passed to rclone.
+Any extra arguments are passed to rclone. The service starts when you log in and restarts if it crashes.
 
-### Run in the background (systemd user service)
-
-```sh
-systemctl --user link "$PWD/icloud-sync.service"
-systemctl --user enable --now icloud-sync
-journalctl --user -u icloud-sync -f    # logs
-```
-
-The service starts when you log in and restarts if it crashes. If the repository isn't at `~/sources/codegik/icloud-sync-for-linux`, edit `ExecStart` in `icloud-sync.service`.
+Without installing, `./sync.sh` in the repository works the same way but ignores the settings file. Configure it with the environment variables below.
 
 ### When the login expires
 
@@ -54,7 +66,7 @@ The same notification appears when you're offline. It's shown once per problem, 
 
 ## Settings
 
-Environment variables. For the service, add `Environment=NAME=value` lines to the unit file.
+Set in `~/.config/icloud-sync/config` (re-run `./install.sh`, or edit it and run `systemctl --user restart icloud-sync`). Environment variables with the same names take precedence.
 
 | Variable | Default | |
 |---|---|---|
@@ -69,9 +81,9 @@ Environment variables. For the service, add `Environment=NAME=value` lines to th
 ## Safety
 
 - Local files that a sync deletes or overwrites are moved to `~/.local/share/icloud-sync/backup/<timestamp>/`. Files deleted in iCloud go to iCloud's *Recently Deleted*.
-- A sync stops if it would delete more than `ICLOUD_MAX_DELETE` percent of files. If the deletions are intended, run `./sync.sh --force` once.
+- A sync stops if it would delete more than `ICLOUD_MAX_DELETE` percent of files. If the deletions are intended, run `icloud-sync --force` once.
 - If a file changed on both sides, the newer one wins and the other is kept alongside it, renamed with a `conflict1` suffix.
-- Only one sync runs at a time. A manual `./sync.sh` while the service is syncing exits right away.
+- Only one sync runs at a time. A manual `icloud-sync` while the service is syncing exits right away.
 - Interrupted runs recover on the next run without needing another `--resync`.
 
 ## Known limits

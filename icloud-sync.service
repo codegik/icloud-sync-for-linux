@@ -1,12 +1,12 @@
 [Unit]
-Description=Two-way sync between ~/icloud and iCloud Drive
+Description=Two-way sync between a local folder and iCloud Drive
 
 [Service]
-# Change this path if the repository lives somewhere else
-ExecStart=%h/sources/codegik/icloud-sync-for-linux/sync.sh --watch
+# Installed by install.sh. Settings are in ~/.config/icloud-sync/config
+ExecStart=%h/.local/bin/icloud-sync --watch
 Restart=on-failure
 RestartSec=5min
-# Exit code 2 means the first ./sync.sh --resync hasn't been run; restarting won't help
+# Exit code 2 means the first icloud-sync --resync hasn't been run; restarting won't help
 RestartPreventExitStatus=2
 
 [Install]
